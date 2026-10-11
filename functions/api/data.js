@@ -15,6 +15,20 @@ function validName(v, max = 64) {
   return typeof v === 'string' && v.length > 0 && v.length <= max && /^[a-zA-Z0-9_-]+$/.test(v);
 }
 
+// Document IDs in the Trading Journal intentionally contain characters such as
+// ':' (for example hl:<wallet>:<coin>:<fill>). They are always passed to D1
+// through bound parameters, so they do not need to be restricted to SQL-name
+// characters. We only reject empty/oversized IDs and control characters.
+function validId(v, max = 256) {
+  return typeof v === 'string' && v.length > 0 && v.length <= max && !/[\u0000-\u001f\u007f]/.test(v);
+}
+
+async function runBatches(DB, statements, size = 50) {
+  for (let i = 0; i < statements.length; i += size) {
+    await DB.batch(statements.slice(i, i + size));
+  }
+}
+
 function b64urlBytes(s) {
   const b64 = s.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(s.length / 4) * 4, '=');
   const bin = atob(b64), out = new Uint8Array(bin.length);
@@ -164,10 +178,10 @@ export async function onRequestPost(context) {
     if (!validName(collection)) return json({ok:false,error:'Invalid collection.'},400);
     const upsert = body.upsert && typeof body.upsert === 'object' && !Array.isArray(body.upsert) ? body.upsert : {};
     const del = Array.isArray(body.delete) ? body.delete : [];
-    if (Object.keys(upsert).length + del.length > 500) return json({ok:false,error:'Too many document changes.'},413);
+    if (Object.keys(upsert).length + del.length > 5000) return json({ok:false,error:'Too many document changes.'},413);
     const statements = [];
     for (const [id, value] of Object.entries(upsert)) {
-      if (!validName(id,128)) return json({ok:false,error:'Invalid document id.'},400);
+      if (!validId(id)) return json({ok:false,error:'Invalid document id.'},400);
       const data = JSON.stringify(value);
       if (data.length > 500_000) return json({ok:false,error:'Document too large.'},413);
       statements.push(env.DB.prepare(`
@@ -178,10 +192,10 @@ export async function onRequestPost(context) {
       `).bind(scope,collection,id,data,who));
     }
     for (const id of del) {
-      if (!validName(id,128)) return json({ok:false,error:'Invalid document id.'},400);
+      if (!validId(id)) return json({ok:false,error:'Invalid document id.'},400);
       statements.push(env.DB.prepare('DELETE FROM reviewspot_docs WHERE scope = ? AND collection = ? AND id = ?').bind(scope,collection,id));
     }
-    if (statements.length) await env.DB.batch(statements);
+    if (statements.length) await runBatches(env.DB, statements);
     return json({ok:true,updated:Object.keys(upsert).length,deleted:del.length});
   }
 
