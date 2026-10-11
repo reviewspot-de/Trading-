@@ -1,6 +1,7 @@
 const DEFAULT_HOST = 'control.reviewspot.de';
 const DEFAULT_TEAM_DOMAIN = 'https://delicate-union-f31f.cloudflareaccess.com';
 let jwksCache = {at: 0, keys: []};
+let schemaReady = false;
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status,
   headers: {
@@ -53,27 +54,27 @@ async function verifyAccess(request, env) {
 }
 
 async function ensureSchema(DB) {
-  await DB.exec(`
-    CREATE TABLE IF NOT EXISTS reviewspot_state (
-      scope TEXT NOT NULL,
-      key TEXT NOT NULL,
-      data TEXT NOT NULL,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_by TEXT,
-      PRIMARY KEY (scope, key)
-    );
-    CREATE TABLE IF NOT EXISTS reviewspot_docs (
-      scope TEXT NOT NULL,
-      collection TEXT NOT NULL,
-      id TEXT NOT NULL,
-      data TEXT NOT NULL,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_by TEXT,
-      PRIMARY KEY (scope, collection, id)
-    );
-    CREATE INDEX IF NOT EXISTS idx_reviewspot_docs_lookup
-      ON reviewspot_docs(scope, collection, updated_at);
-  `);
+  if (schemaReady) return;
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS reviewspot_state (
+    scope TEXT NOT NULL,
+    key TEXT NOT NULL,
+    data TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_by TEXT,
+    PRIMARY KEY (scope, key)
+  )`).run();
+  await DB.prepare(`CREATE TABLE IF NOT EXISTS reviewspot_docs (
+    scope TEXT NOT NULL,
+    collection TEXT NOT NULL,
+    id TEXT NOT NULL,
+    data TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_by TEXT,
+    PRIMARY KEY (scope, collection, id)
+  )`).run();
+  await DB.prepare(`CREATE INDEX IF NOT EXISTS idx_reviewspot_docs_lookup
+    ON reviewspot_docs(scope, collection, updated_at)`).run();
+  schemaReady = true;
 }
 
 function guard(context) {
@@ -90,7 +91,10 @@ export async function onRequestGet(context) {
   const blocked = guard(context); if (blocked) return blocked;
   const {request, env} = context;
   try { await verifyAccess(request, env); } catch (e) { return json({ok:false,error:e.message || 'Invalid Cloudflare Access session.'},403); }
-  await ensureSchema(env.DB);
+  try { await ensureSchema(env.DB); } catch (e) {
+    console.error('ReviewSpot D1 schema init failed', e);
+    return json({ok:false,error:'Database initialization failed: ' + (e && e.message ? e.message : String(e))},500);
+  }
   const u = new URL(request.url);
   const kind = u.searchParams.get('kind');
   const scope = u.searchParams.get('scope');
@@ -123,7 +127,10 @@ export async function onRequestPost(context) {
   const blocked = guard(context); if (blocked) return blocked;
   const {request, env} = context;
   let identity; try { identity = await verifyAccess(request, env); } catch (e) { return json({ok:false,error:e.message || 'Invalid Cloudflare Access session.'},403); }
-  await ensureSchema(env.DB);
+  try { await ensureSchema(env.DB); } catch (e) {
+    console.error('ReviewSpot D1 schema init failed', e);
+    return json({ok:false,error:'Database initialization failed: ' + (e && e.message ? e.message : String(e))},500);
+  }
   let body;
   try { body = await request.json(); } catch { return json({ok:false,error:'Invalid JSON.'},400); }
   const scope = body && body.scope;
