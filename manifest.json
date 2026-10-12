@@ -1,0 +1,12 @@
+{
+  "id": "/",
+  "name": "ReviewSpot Control Center",
+  "short_name": "ReviewSpot",
+  "description": "Trading Journal und Whale Tracker für ReviewSpot.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#06111f",
+  "theme_color": "#06111f",
+  "orientation": "any"
+}
